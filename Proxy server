@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# Project: ADS Proxy Server - Simple Proxy + Website Blocker
+
+# Must be run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "\033[1;31m🚫 This script must be run as root (use sudo).\033[0m"
+    exit 1
+fi
+
+# Setup block list log file
+log_file="/etc/ads_proxy/blocked_sites.log"
+mkdir -p /etc/ads_proxy
+touch "$log_file"
+
+# Fancy box for menu
+print_line() {
+    echo -e "\033[1;34m╔══════════════════════════════════════════════════════════╗\033[0m"
+}
+
+print_end_line() {
+    echo -e "\033[1;34m╚══════════════════════════════════════════════════════════╝\033[0m"
+}
+
+display_menu() {
+    clear
+    print_line
+    echo -e "\033[1;32m             🌐 ADS Proxy Server - Manager 🌐             \033[0m"
+    print_end_line
+    echo -e "\033[1;36m  [1] 🛠  Install and Configure ADS Proxy Server\033[0m"
+    echo -e "\033[1;36m  [2] 🚫  Block a Website\033[0m"
+    echo -e "\033[1;36m  [3] ✅  Unblock a Website\033[0m"
+    echo -e "\033[1;36m  [4] 📄  View Blocked Websites\033[0m"
+    echo -e "\033[1;36m  [5] 🔄  Restart ADS Proxy Server\033[0m"
+    echo -e "\033[1;31m  [6] ❌  Exit\033[0m"
+    print_line
+    echo -n -e "\033[1;33m➡  Please choose an option [1-6]: \033[0m"
+}
+
+install_and_configure() {
+    echo -e "\033[1;32m🛠 Installing TinyProxy + UFW and configuring...\033[0m"
+    apt update && apt upgrade -y
+    apt install -y tinyproxy ufw dnsutils
+
+    echo -e "\033[1;32m🔐 Setting up UFW firewall rules...\033[0m"
+    ufw allow 22/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw allow 8888/tcp
+    ufw --force enable
+
+    cp /etc/tinyproxy/tinyproxy.conf /etc/tinyproxy/tinyproxy.conf.bak
+    SUBNET="192.168.1.0/24"
+    sed -i 's/^#Port 8888/Port 8888/' /etc/tinyproxy/tinyproxy.conf
+    sed -i "s/^#Allow 127.0.0.1/Allow $SUBNET/" /etc/tinyproxy/tinyproxy.conf
+
+    systemctl enable tinyproxy
+    systemctl start tinyproxy
+
+    echo -e "\033[1;32m✅ ADS Proxy Server is now installed and running!\033[0m"
+}
+
+block_website() {
+    echo -n -e "\033[1;36m🌐 Enter the website to block (e.g., example.com): \033[0m"
+    read website
+
+    ip_addresses=$(dig +short "$website" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+
+    if [ -z "$ip_addresses" ]; then
+        echo -e "\033[1;31m❗ Domain could not be resolved. Please try again.\033[0m"
+        return
+    fi
+
+    echo -e "\033[1;33m🚫 Blocking website: $website\033[0m"
+    for ip in $ip_addresses; do
+        ufw deny out to "$ip" port 80
+        ufw deny out to "$ip" port 443
+        ufw deny out to "$ip" proto icmp
+        echo "$website ($ip)" >> "$log_file"
+    done
+
+    echo -e "\033[1;32m✅ Website $website has been successfully blocked.\033[0m"
+}
+
+unblock_website() {
+    echo -n -e "\033[1;36m🌐 Enter the website to unblock (e.g., example.com): \033[0m"
+    read website
+
+    ip_addresses=$(dig +short "$website" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+
+    if [ -z "$ip_addresses" ]; then
+        echo -e "\033[1;31m❗ Domain could not be resolved. Please try again.\033[0m"
+        return
+    fi
+
+    echo -e "\033[1;33m🔓 Unblocking website: $website\033[0m"
+    for ip in $ip_addresses; do
+        ufw delete deny out to "$ip" port 80
+        ufw delete deny out to "$ip" port 443
+        ufw delete deny out to "$ip" proto icmp
+        sed -i "/$website ($ip)/d" "$log_file"
+    done
+
+    echo -e "\033[1;32m✅ Website $website has been unblocked.\033[0m"
+}
+
+view_blocked_websites() {
+    echo -e "\033[1;36m📄 List of Blocked Websites:\033[0m"
+    if [ -s "$log_file" ]; then
+        cat "$log_file"
+    else
+        echo -e "\033[1;33mNo websites are currently blocked.\033[0m"
+    fi
+}
+
+restart_tinyproxy() {
+    echo -e "\033[1;34m🔄 Restarting ADS Proxy Server service...\033[0m"
+    systemctl restart tinyproxy
+    echo -e "\033[1;32m✅ TinyProxy service restarted successfully.\033[0m"
+}
+
+# Main loop
+while true; do
+    display_menu
+    read -r option
+
+    case $option in
+        1) install_and_configure ;;
+        2) block_website ;;
+        3) unblock_website ;;
+        4) view_blocked_websites ;;
+        5) restart_tinyproxy ;;
+        6)
+            echo -e "\033[1;31m👋 Exiting... Goodbye from ADS Proxy Server!\033[0m"
+            exit 0
+            ;;
+        *) echo -e "\033[1;31m❌ Invalid option. Please choose from [1-6].\033[0m" ;;
+    esac
+
+    echo -e ""
+    echo -n -e "\033[1;35m🔁 Press Enter to return to the main menu... \033[0m"
+    read -r
+done
